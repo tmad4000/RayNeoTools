@@ -1,0 +1,230 @@
+#!/usr/bin/env python3
+"""rn - RayNeo X3 control CLI.
+
+Wraps adb + the RayNeoBrowser HTTP control server.
+
+Examples:
+  rn open https://google.com
+  rn type 'hello world'
+  rn key TAB
+  rn tap 320 240
+  rn shot          # screenshot -> /tmp/rayneo.png
+  rn js 'document.title'
+  rn dom | less
+  rn title
+  rn back
+  rn install       # install/reinstall the browser APK
+  rn forward       # set up port forward for HTTP control
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import shlex
+import subprocess
+import sys
+import textwrap
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from pathlib import Path
+
+PKG = "com.jacobcole.rayneobrowser"
+ACTIVITY = f"{PKG}/.MainActivity"
+PORT = 7317
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+APK_PATH = REPO_ROOT / "browser" / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
+
+
+def adb(*args: str, check: bool = True, capture: bool = True) -> subprocess.CompletedProcess:
+    cmd = ["adb", *args]
+    return subprocess.run(cmd, check=check, capture_output=capture, text=True)
+
+
+def ensure_forward() -> None:
+    try:
+        subprocess.run(["adb", "forward", f"tcp:{PORT}", f"tcp:{PORT}"], check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        print(f"adb forward failed: {e.stderr}", file=sys.stderr)
+        sys.exit(1)
+
+
+def http(method: str, path: str, body: dict | None = None, timeout: float = 10.0) -> tuple[int, bytes]:
+    ensure_forward()
+    url = f"http://127.0.0.1:{PORT}{path}"
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method)
+    if body is not None:
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.read()
+    except urllib.error.URLError as e:
+        print(f"http {method} {path} failed: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def cmd_open(args) -> None:
+    url = args.url
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    adb("shell", "am", "start", "-n", ACTIVITY, "-a", "android.intent.action.VIEW", "-d", url)
+    print(f"opened {url}")
+
+
+def cmd_type(args) -> None:
+    text = " ".join(args.text)
+    # adb shell input text: escape shell metachars + %20/%s for space
+    # chars that break on-device shell parsing
+    SHELL_META = "\\()<>|;&'\"*?$`"
+    escaped = "".join(("\\" + c if c in SHELL_META else c) for c in text)
+    escaped = escaped.replace(" ", "%s")
+    adb("shell", "input", "text", escaped)
+
+
+def cmd_key(args) -> None:
+    key = args.key.upper()
+    if not key.startswith("KEYCODE_"):
+        key = f"KEYCODE_{key}"
+    adb("shell", "input", "keyevent", key)
+
+
+def cmd_tap(args) -> None:
+    adb("shell", "input", "tap", str(args.x), str(args.y))
+
+
+def cmd_swipe(args) -> None:
+    adb("shell", "input", "swipe", str(args.x1), str(args.y1), str(args.x2), str(args.y2), str(args.ms))
+
+
+def cmd_shot(args) -> None:
+    out = Path(args.out).expanduser()
+    raw = subprocess.run(["adb", "exec-out", "screencap", "-p"], check=True, capture_output=True).stdout
+    out.write_bytes(raw)
+    print(f"saved {out} ({len(raw)} bytes)")
+
+
+def cmd_js(args) -> None:
+    _, body = http_post_raw("/js", args.code)
+    print(body.decode())
+
+
+def http_post_raw(path: str, raw: str) -> tuple[int, bytes]:
+    ensure_forward()
+    url = f"http://127.0.0.1:{PORT}{path}"
+    req = urllib.request.Request(url, data=raw.encode(), method="POST")
+    req.add_header("Content-Type", "text/plain")
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        return resp.status, resp.read()
+
+
+def cmd_dom(args) -> None:
+    _, body = http("GET", "/dom")
+    text = body.decode()
+    # the DOM is returned as a JSON-encoded string (from evaluateJavascript)
+    if text.startswith('"') and text.endswith('"'):
+        text = json.loads(text)
+    print(text)
+
+
+def cmd_title(args) -> None:
+    _, body = http("GET", "/title")
+    print(body.decode())
+
+
+def cmd_back(args) -> None:
+    http("GET", "/back")
+
+
+def cmd_forward_cmd(args) -> None:
+    http("GET", "/forward")
+
+
+def cmd_ping(args) -> None:
+    _, body = http("GET", "/ping")
+    print(body.decode())
+
+
+def cmd_install(args) -> None:
+    if not APK_PATH.exists():
+        print(f"APK not found at {APK_PATH}. Run: (cd {REPO_ROOT} && ./gradlew :app:assembleDebug)", file=sys.stderr)
+        sys.exit(1)
+    adb("install", "-r", "-g", str(APK_PATH), capture=False)
+
+
+def cmd_forward(args) -> None:
+    ensure_forward()
+    print(f"adb forward tcp:{PORT} -> device tcp:{PORT}")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(prog="rn", description="Control RayNeo X3 browser/input via adb")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("open", help="open a URL in RayNeoBrowser")
+    s.add_argument("url")
+    s.set_defaults(func=cmd_open)
+
+    s = sub.add_parser("type", help="type text into focused field")
+    s.add_argument("text", nargs="+")
+    s.set_defaults(func=cmd_type)
+
+    s = sub.add_parser("key", help="send a keyevent (TAB, ENTER, BACK, DPAD_DOWN, etc)")
+    s.add_argument("key")
+    s.set_defaults(func=cmd_key)
+
+    s = sub.add_parser("tap", help="tap screen coordinate")
+    s.add_argument("x", type=int)
+    s.add_argument("y", type=int)
+    s.set_defaults(func=cmd_tap)
+
+    s = sub.add_parser("swipe", help="swipe from x1,y1 to x2,y2 over ms milliseconds")
+    s.add_argument("x1", type=int); s.add_argument("y1", type=int)
+    s.add_argument("x2", type=int); s.add_argument("y2", type=int)
+    s.add_argument("ms", type=int, nargs="?", default=300)
+    s.set_defaults(func=cmd_swipe)
+
+    s = sub.add_parser("shot", help="screenshot to PNG (default /tmp/rayneo.png)")
+    s.add_argument("out", nargs="?", default="/tmp/rayneo.png")
+    s.set_defaults(func=cmd_shot)
+
+    s = sub.add_parser("js", help="evaluate JS in the browser WebView")
+    s.add_argument("code")
+    s.set_defaults(func=cmd_js)
+
+    s = sub.add_parser("dom", help="print current page DOM")
+    s.set_defaults(func=cmd_dom)
+
+    s = sub.add_parser("title", help="print current page title + URL")
+    s.set_defaults(func=cmd_title)
+
+    s = sub.add_parser("back", help="browser back")
+    s.set_defaults(func=cmd_back)
+
+    s = sub.add_parser("fwd", help="browser forward")
+    s.set_defaults(func=cmd_forward_cmd)
+
+    s = sub.add_parser("ping", help="ping the browser control server")
+    s.set_defaults(func=cmd_ping)
+
+    s = sub.add_parser("install", help="install/reinstall the browser APK")
+    s.set_defaults(func=cmd_install)
+
+    s = sub.add_parser("forward", help="set up adb port forward for HTTP control")
+    s.set_defaults(func=cmd_forward)
+
+    return p
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

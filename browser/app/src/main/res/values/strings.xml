@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RayNeo Browser</string>
+    <string name="url_hint">Enter URL or search</string>
+    <string name="go">Go</string>
+    <string name="back">Back</string>
+</resources>
