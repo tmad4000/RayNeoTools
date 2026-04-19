@@ -34,8 +34,22 @@ class ControlServer(
             "/ping" -> json(mapOf("ok" to true, "version" to "0.1.0"))
             "/refresh" -> handleRefresh()
             "/tap-element" -> handleTapElement(session)
+            "/stereo" -> handleStereo(session)
             else -> newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "not found: ${session.uri}")
         }
+    }
+
+    private fun handleStereo(session: IHTTPSession): Response {
+        val onParam = session.parameters["on"]?.firstOrNull()
+        val main = activity as? MainActivity
+            ?: return json(mapOf("error" to "activity is not MainActivity"), Response.Status.INTERNAL_ERROR)
+        if (onParam != null) {
+            val desired = onParam == "1" || onParam.equals("true", ignoreCase = true)
+            val latch = CountDownLatch(1)
+            activity.runOnUiThread { main.setStereoEnabled(desired); latch.countDown() }
+            latch.await(1, TimeUnit.SECONDS)
+        }
+        return json(mapOf("stereo" to main.isStereoEnabled()))
     }
 
     private fun handleRefresh(): Response {

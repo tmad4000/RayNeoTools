@@ -22,15 +22,26 @@ class StereoLayout @JvmOverloads constructor(
     defStyle: Int = 0
 ) : FrameLayout(context, attrs, defStyle) {
 
+    var stereoEnabled: Boolean = true
+        set(value) {
+            if (field == value) return
+            field = value
+            requestLayout()
+            invalidate()
+        }
+
     private val halfWidth: Int
         get() = width / 2
 
     init {
-        // We draw children manually in dispatchDraw; no need for background
         setWillNotDraw(false)
     }
 
     override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+        if (!stereoEnabled) {
+            super.onMeasure(widthMeasureSpec, heightMeasureSpec)
+            return
+        }
         val totalWidth = MeasureSpec.getSize(widthMeasureSpec)
         val heightMode = MeasureSpec.getMode(heightMeasureSpec)
         val heightSize = MeasureSpec.getSize(heightMeasureSpec)
@@ -45,6 +56,10 @@ class StereoLayout @JvmOverloads constructor(
     }
 
     override fun onLayout(changed: Boolean, left: Int, top: Int, right: Int, bottom: Int) {
+        if (!stereoEnabled) {
+            super.onLayout(changed, left, top, right, bottom)
+            return
+        }
         val half = (right - left) / 2
         for (i in 0 until childCount) {
             val c = getChildAt(i)
@@ -53,9 +68,11 @@ class StereoLayout @JvmOverloads constructor(
     }
 
     override fun dispatchDraw(canvas: Canvas) {
-        // Left eye — children at native x=0..halfWidth
+        if (!stereoEnabled) {
+            super.dispatchDraw(canvas)
+            return
+        }
         super.dispatchDraw(canvas)
-        // Right eye — same children translated to x=halfWidth..width
         val save = canvas.save()
         canvas.translate(halfWidth.toFloat(), 0f)
         super.dispatchDraw(canvas)
@@ -63,7 +80,7 @@ class StereoLayout @JvmOverloads constructor(
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        // If the touch lands on the right eye, translate it back to the left-eye coords.
+        if (!stereoEnabled) return super.dispatchTouchEvent(ev)
         val half = halfWidth
         if (ev.x >= half && half > 0) {
             val copy = MotionEvent.obtain(ev)
