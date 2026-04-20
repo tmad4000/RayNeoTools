@@ -38,6 +38,7 @@ class ControlServer(
             "/volume" -> handleVolume(session)
             "/key" -> handleKey(session)
             "/fullscreen" -> handleFullscreen()
+            "/play" -> handlePlay()
             else -> newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "not found: ${session.uri}")
         }
     }
@@ -84,13 +85,52 @@ class ControlServer(
     }
 
     private fun handleFullscreen(): Response {
-        val js = "(function(){" +
-            "var v=document.querySelector('video'); if(v && v.requestFullscreen){v.requestFullscreen(); return 'video-fs';}" +
-            "var ifr=document.querySelector('iframe[src*=wistia], iframe[src*=youtube], iframe[src*=vimeo], iframe[src*=player]');" +
-            "if(ifr && ifr.requestFullscreen){ifr.requestFullscreen(); return 'iframe-fs';}" +
-            "return 'no-video';})()"
+        val js = buildPlayerDispatchJs(
+            html5 = "if(v.requestFullscreen) v.requestFullscreen(); else if(v.webkitEnterFullscreen) v.webkitEnterFullscreen(); return 'html5-fs';",
+            wistia = "window._wq=window._wq||[]; window._wq.push({id:id, onReady:function(v){v.requestFullscreen();}}); return 'wistia-fs:'+id;"
+        )
         activity.runOnUiThread { webView.evaluateJavascript(js, null) }
         return json(mapOf("ok" to true))
+    }
+
+    private fun handlePlay(): Response {
+        val js = buildPlayerDispatchJs(
+            html5 = "if(v.paused) v.play(); else v.pause(); return 'html5:'+(v.paused?'paused':'playing');",
+            wistia = "window._wq=window._wq||[]; window._wq.push({id:id, onReady:function(v){v.state()==='playing'?v.pause():v.play();}}); return 'wistia:'+id;"
+        )
+        val result = arrayOf<String?>(null)
+        val latch = CountDownLatch(1)
+        activity.runOnUiThread { webView.evaluateJavascript(js) { r -> result[0] = r; latch.countDown() } }
+        latch.await(3, TimeUnit.SECONDS)
+        return json(mapOf("result" to (result[0] ?: "null")))
+    }
+
+    /**
+     * Build a JS snippet that picks the active player (HTML5 video, Wistia,
+     * or first visible iframe) and runs a player-specific action.
+     *
+     * [html5] runs with `v` bound to the chosen <video> element.
+     * [wistia] runs with `id` bound to the Wistia video ID string.
+     */
+    private fun buildPlayerDispatchJs(html5: String, wistia: String): String {
+        return """(function(){
+            var videos = [].slice.call(document.querySelectorAll('video')).filter(function(v){return v.duration>0 || v.readyState>0;});
+            if (videos.length) {
+                var v = videos.find(function(v){return !v.paused;}) || videos[0];
+                $html5
+            }
+            var wiList = [].slice.call(document.querySelectorAll('iframe[src*=wistia]'));
+            if (wiList.length) {
+                var inView = wiList.find(function(ifr){
+                    var r = ifr.getBoundingClientRect();
+                    return r.width>100 && r.top<window.innerHeight && r.bottom>0 && r.right>0 && r.left<window.innerWidth;
+                }) || wiList[0];
+                var m = inView.src.match(/iframe\/([^?\/]+)/);
+                var id = m ? m[1] : '_all';
+                $wistia
+            }
+            return 'no-player';
+        })()"""
     }
 
     private fun handleVolume(session: IHTTPSession): Response {

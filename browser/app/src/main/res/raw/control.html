@@ -135,7 +135,9 @@ function key(k) {
 }
 
 function tapVideo() {
-  postJson('/tap-element', { selector: 'iframe[src*=wistia], iframe[src*=youtube], iframe[src*=vimeo], iframe[src*=player], video' });
+  // Player-aware: picks the active <video> or in-view Wistia iframe and uses
+  // its native play/pause API (not a synthetic tap).
+  get('/play');
 }
 function vol(action) { get('/volume?action=' + action); }
 function nativeKey(name) { get('/key?name=' + name); }
