@@ -41,6 +41,16 @@
   <div class="section">
     <div class="muted">Video</div>
     <button onclick="play()">▶ Play / Pause</button>
+    <div class="row">
+      <button class="ghost" onclick="seek(-30)">− 30s</button>
+      <button class="ghost" onclick="seek(-10)">− 10s</button>
+      <button class="ghost" onclick="seek(10)">+ 10s</button>
+      <button class="ghost" onclick="seek(30)">+ 30s</button>
+    </div>
+    <div class="row">
+      <input id="seekto" type="text" placeholder="m:ss or seconds" style="margin:0;">
+      <button class="ghost" onclick="seekTo()" style="flex:0 0 90px; margin:0;">Jump to</button>
+    </div>
     <button class="ghost" onclick="fullscreen()">⛶ Maximize</button>
     <div class="row">
       <button class="ghost" onclick="vol('down')">🔉 Vol −</button>
@@ -116,6 +126,19 @@ function play()       { get('/play'); }
 function fullscreen() { get('/fullscreen'); }
 function vol(action)  { get('/volume?action=' + action); }
 function nativeKey(n) { get('/key?name=' + n); }
+function seek(delta)  { get('/seek?delta=' + delta); }
+function seekTo() {
+  const raw = document.getElementById('seekto').value.trim();
+  if (!raw) return;
+  // parse m:ss, h:mm:ss, or raw seconds
+  const parts = raw.split(':').map(Number);
+  if (parts.some(isNaN)) return setStatus('invalid time');
+  let secs = 0;
+  if (parts.length === 1) secs = parts[0];
+  else if (parts.length === 2) secs = parts[0]*60 + parts[1];
+  else if (parts.length === 3) secs = parts[0]*3600 + parts[1]*60 + parts[2];
+  get('/seek?to=' + secs);
+}
 
 function typeText() {
   const t = document.getElementById('typebox').value;

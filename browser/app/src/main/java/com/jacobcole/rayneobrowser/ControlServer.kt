@@ -39,6 +39,7 @@ class ControlServer(
             "/key" -> handleKey(session)
             "/fullscreen" -> handleFullscreen()
             "/play" -> handlePlay()
+            "/seek" -> handleSeek(session)
             else -> newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "not found: ${session.uri}")
         }
     }
@@ -106,6 +107,24 @@ class ControlServer(
         }
         latch.await(1, TimeUnit.SECONDS)
         return json(mapOf("ok" to true, "viewportMaxed" to maxed[0]))
+    }
+
+    private fun handleSeek(session: IHTTPSession): Response {
+        val delta = session.parameters["delta"]?.firstOrNull()?.toDoubleOrNull()
+        val to = session.parameters["to"]?.firstOrNull()?.toDoubleOrNull()
+        if (delta == null && to == null) {
+            return json(mapOf("error" to "pass ?delta=SECONDS or ?to=SECONDS"), Response.Status.BAD_REQUEST)
+        }
+        val html5 = if (to != null) "v.currentTime = $to; return 'html5:to:'+v.currentTime;"
+                    else "v.currentTime = Math.max(0, v.currentTime + ($delta)); return 'html5:delta:'+v.currentTime;"
+        val wistia = if (to != null) "window._wq=window._wq||[]; window._wq.push({id:id, onReady:function(v){v.time($to);}}); return 'wistia:to:$to';"
+                     else "window._wq=window._wq||[]; window._wq.push({id:id, onReady:function(v){v.time(Math.max(0, v.time()+($delta)));}}); return 'wistia:delta:$delta';"
+        val js = buildPlayerDispatchJs(html5 = html5, wistia = wistia)
+        val result = arrayOf<String?>(null)
+        val latch = CountDownLatch(1)
+        activity.runOnUiThread { webView.evaluateJavascript(js) { r -> result[0] = r; latch.countDown() } }
+        latch.await(3, TimeUnit.SECONDS)
+        return json(mapOf("result" to (result[0] ?: "null")))
     }
 
     private fun handlePlay(): Response {
