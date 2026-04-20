@@ -92,6 +92,20 @@ class MainActivity : AppCompatActivity() {
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 binding.urlBar.setText(url ?: "")
+                // Auto-unmute: YouTube (and most autoplay-policy-respecting sites)
+                // start <video> with muted=true. Persistently clear that for the
+                // first ~10s after load so audio works without manual unmute.
+                view?.evaluateJavascript(
+                    """(function(){
+                        var unmute = function(){
+                            document.querySelectorAll('video').forEach(function(v){ if (v.muted) v.muted = false; });
+                        };
+                        unmute();
+                        var n = 0;
+                        var iv = setInterval(function(){ unmute(); if (++n > 20) clearInterval(iv); }, 500);
+                    })();""".trimIndent(),
+                    null
+                )
             }
         }
         wv.webChromeClient = object : WebChromeClient() {

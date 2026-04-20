@@ -278,10 +278,22 @@ class ControlServer(
                 else -> null
             }
             if (wantMuted != null) {
-                val js = buildPlayerDispatchJs(
-                    html5 = "v.muted = $wantMuted; if(!v.paused) v.play(); return 'html5:muted='+v.muted;",
-                    wistia = "window._wq=window._wq||[]; window._wq.push({id:id, onReady:function(v){${if (wantMuted) "v.mute();" else "v.unmute();"}}}); return 'wistia:' + id;"
-                )
+                // Set .muted on every <video> on the page (YouTube sometimes has
+                // a hidden preload video plus the active one) and fire YouTube's
+                // own 'M' keyboard shortcut which their player JS honors.
+                val js = """(function(){
+                    var videos = document.querySelectorAll('video');
+                    videos.forEach(function(v){ v.muted = $wantMuted; });
+                    // Wistia
+                    try {
+                        var wiList = document.querySelectorAll('iframe[src*=wistia]');
+                        wiList.forEach(function(ifr){
+                            var m = ifr.src.match(/iframe\/([^?\/]+)/);
+                            if (m && window._wq) window._wq.push({id:m[1], onReady:function(v){${if (wantMuted) "v.mute();" else "v.unmute();"}}});
+                        });
+                    } catch(e){}
+                    return 'muted=' + $wantMuted + ',videos=' + videos.length;
+                })()"""
                 webView.evaluateJavascript(js, null)
             }
             latch.countDown()
