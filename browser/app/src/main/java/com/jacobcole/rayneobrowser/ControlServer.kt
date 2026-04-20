@@ -215,6 +215,22 @@ class ControlServer(
                 "unmute" -> am.adjustStreamVolume(stream, android.media.AudioManager.ADJUST_UNMUTE, android.media.AudioManager.FLAG_SHOW_UI)
                 "max" -> am.setStreamVolume(stream, am.getStreamMaxVolume(stream), android.media.AudioManager.FLAG_SHOW_UI)
             }
+            // Also clear/set the page-level .muted property on the active player.
+            // YouTube auto-starts with <video>.muted=true due to browser autoplay
+            // policy — adjusting the Android STREAM_MUSIC volume alone won't make
+            // sound come out; we also have to flip video.muted.
+            val wantMuted = when (action) {
+                "mute" -> true
+                "unmute", "up", "max" -> false
+                else -> null
+            }
+            if (wantMuted != null) {
+                val js = buildPlayerDispatchJs(
+                    html5 = "v.muted = $wantMuted; if(!v.paused) v.play(); return 'html5:muted='+v.muted;",
+                    wistia = "window._wq=window._wq||[]; window._wq.push({id:id, onReady:function(v){${if (wantMuted) "v.mute();" else "v.unmute();"}}}); return 'wistia:' + id;"
+                )
+                webView.evaluateJavascript(js, null)
+            }
             latch.countDown()
         }
         latch.await(1, TimeUnit.SECONDS)
